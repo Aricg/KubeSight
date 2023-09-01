@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+
 import sys
 import re
 import time
@@ -9,6 +10,87 @@ import yaml
 import json
 import requests
 import subprocess
+import chromadb
+import hashlib
+
+
+
+
+def display_chromadb_contents():
+    """
+    Display the contents of the ChromaDB database for debugging purposes.
+    """
+
+    # Initialize ChromaDB persistent client
+    chroma_client = chromadb.PersistentClient(path="/tmp")
+
+    collection = chroma_client.get_collection(name="kube_commands")
+
+    # Use the peek() method to get the first few items from the collection
+    items = collection.peek()
+
+    # Iterate over the items and display the associated document and metadata
+    for idx, doc_id in enumerate(items['ids']):
+        print(f"ID: {doc_id}")
+        print(f"Document: {items['documents'][idx]}")
+        print(f"Metadata: {items['metadatas'][idx]}")
+        print('-'*40)  # Separator for better readability
+
+
+
+def compute_id_from_command(command):
+    """
+    Compute a unique hash-based ID from the given command.
+
+    Args:
+    - command (str): The command string.
+
+    Returns:
+    - str: A hash-based unique ID.
+    """
+    return hashlib.sha256(command.encode()).hexdigest()
+
+def store_embedding_in_chromadb(embedding_response, command):
+    """
+    Store the embedding in ChromaDB with associated metadata.
+
+    Args:
+    - embedding (dict): The embedding to store.
+    - command (str): The command used to get the helm output.
+
+    Returns:
+    - None
+    """
+    # Initialize ChromaDB client
+    # in memory -> chroma_client = chromadb.Client()
+    # on disk
+    chroma_client = chromadb.PersistentClient(path="/tmp")
+
+    print(f"Current collections in ChromaDB: {chroma_client.list_collections()}")
+    
+    if not any(col.name == "kube_commands" for col in chroma_client.list_collections()):
+        print("Creating 'kube_commands' collection.")
+        collection = chroma_client.create_collection(name="kube_commands")
+    else:
+        print("Using existing 'kube_commands' collection.")
+        collection = chroma_client.get_collection(name="kube_commands")
+
+    # Get embedding vector from the response
+    embedding_vector = embedding_response['data'][0]['embedding']
+
+    # Create metadata for the embedding
+    metadata = {"command": command}
+
+    # Compute unique ID for this command
+    unique_id = compute_id_from_command(command)
+
+    # Insert the embedding and metadata into the collection
+    collection.add(
+        embeddings=[embedding_vector],
+        documents=[command],  # storing the command as the document itself for potential retrieval
+        metadatas=[metadata],
+        ids=[unique_id]
+    )
 
 def save_embedding_to_disk(embedding, filename=None):
     with open(filename, 'w') as f:
@@ -76,6 +158,10 @@ def main(args):
         if args.save:
             saved_filename = save_embedding_to_disk(embedding_response, filename)
             print(f"Embedding saved to {saved_filename}")
+
+        # Store the embedding in ChromaDB
+        store_embedding_in_chromadb(embedding_response, args.command)
+        display_chromadb_contents()
 
 
 
