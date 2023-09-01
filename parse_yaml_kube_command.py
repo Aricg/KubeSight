@@ -14,6 +14,23 @@ import chromadb
 import hashlib
 
 
+def command_already_embedded(command, collection):
+    """
+    Check if the given command is already in the metadata of any stored embeddings.
+
+    Args:
+    - command (str): The command string.
+    - collection: The ChromaDB collection.
+
+    Returns:
+    - bool: True if the command is already embedded, False otherwise.
+    """
+    items = collection.peek()
+    for metadata in items['metadatas']:
+        if metadata['command'] == command:
+            return True
+    return False
+
 
 
 def display_chromadb_contents():
@@ -50,6 +67,7 @@ def compute_id_from_command(command):
     """
     return hashlib.sha256(command.encode()).hexdigest()
 
+
 def store_embedding_in_chromadb(embedding_response, command):
     """
     Store the embedding in ChromaDB with associated metadata.
@@ -62,18 +80,19 @@ def store_embedding_in_chromadb(embedding_response, command):
     - None
     """
     # Initialize ChromaDB client
-    # in memory -> chroma_client = chromadb.Client()
-    # on disk
     chroma_client = chromadb.PersistentClient(path="/tmp")
 
-    print(f"Current collections in ChromaDB: {chroma_client.list_collections()}")
-    
-    if not any(col.name == "kube_commands" for col in chroma_client.list_collections()):
-        print("Creating 'kube_commands' collection.")
-        collection = chroma_client.create_collection(name="kube_commands")
-    else:
-        print("Using existing 'kube_commands' collection.")
-        collection = chroma_client.get_collection(name="kube_commands")
+    # Get or create the collection
+    collection = chroma_client.get_or_create_collection(name="kube_commands")
+
+    # Compute unique ID for this command
+    unique_id = compute_id_from_command(command)
+
+    # Check if the embedding with this ID already exists
+    existing_items = collection.peek()
+    if unique_id in existing_items['ids']:
+        print(f"Add of existing embedding ID: {unique_id}")
+        return  # Exit the function, skip adding the embedding
 
     # Get embedding vector from the response
     embedding_vector = embedding_response['data'][0]['embedding']
@@ -81,16 +100,14 @@ def store_embedding_in_chromadb(embedding_response, command):
     # Create metadata for the embedding
     metadata = {"command": command}
 
-    # Compute unique ID for this command
-    unique_id = compute_id_from_command(command)
-
     # Insert the embedding and metadata into the collection
     collection.add(
         embeddings=[embedding_vector],
-        documents=[command],  # storing the command as the document itself for potential retrieval
+        documents=[command],  
         metadatas=[metadata],
         ids=[unique_id]
     )
+
 
 def save_embedding_to_disk(embedding, filename=None):
     with open(filename, 'w') as f:
@@ -135,12 +152,22 @@ def main(args):
     helm_output = helm_output.decode()
 
     parsed_helm_documents = parse_helm_output(helm_output)
+
     # If only parse mode, print the parsed documents
     if args.parse:
         for doc in parsed_helm_documents:
             print(doc)
             print('-'*40)  # Separator for better readability
 
+    # Initialize ChromaDB persistent client
+    chroma_client = chromadb.PersistentClient(path="/tmp")
+    collection = chroma_client.get_or_create_collection(name="kube_commands")
+
+    # If the command is already embedded, skip fetching the embedding
+    if command_already_embedded(args.command, collection):
+        print(f"Embedding for command '{args.command}' already exists.")
+        display_chromadb_contents()
+        return
 
     # If embed mode, send the parsed output to OpenAI and print the response
     if args.embed:
@@ -148,21 +175,13 @@ def main(args):
         embedding_response = get_openai_embedding(parsed_output)
         print(embedding_response)
 
-        # Determine the filename
-        if not args.filename:
-            filename = "foo"
-        else:
-            filename = args.filename
-
-
         if args.save:
-            saved_filename = save_embedding_to_disk(embedding_response, filename)
+            saved_filename = save_embedding_to_disk(embedding_response, args.filename or "foo")
             print(f"Embedding saved to {saved_filename}")
 
         # Store the embedding in ChromaDB
         store_embedding_in_chromadb(embedding_response, args.command)
         display_chromadb_contents()
-
 
 
 if __name__ == '__main__':
