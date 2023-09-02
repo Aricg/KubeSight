@@ -1,79 +1,40 @@
-#Kubesight
-# Vector Embedding of YAML output
+# vector_embed_yaml.py Documentation
 
-## Overview
+This script processes helm output, sends it to OpenAI for text embedding, stores the embedding in a ChromaDB database.
+It can also query the ChromaDB for similar documents based on the embedded vector and then provide them as context when generating responses using OpenAI's GPT-4 model.
 
-This Python script processes yaml, optionally sends it to OpenAI for embedding, and stores the result in a ChromaDB database. It also provides an option to save the embedding to a file.
+## Index
+1. [Requirements](#requirements)
+2. [Usage](#usage)
+3. [Functions](#functions)
+4. [Error Handling](#error-handling)
 
-## Table of Contents
-
-- [Getting Started](#getting-started)
-  - [Dependencies](#dependencies)
-  - [Usage](#usage)
-- [Functions](#functions)
-  - [command_already_embedded](#command_already_embedded)
-  - [display_chromadb_contents](#display_chromadb_contents)
-  - [compute_id_from_command](#compute_id_from_command)
-  - [store_embedding_in_chromadb](#store_embedding_in_chromadb)
-  - [save_embedding_to_disk](#save_embedding_to_disk)
-  - [parse_helm_output](#parse_helm_output)
-  - [get_openai_embedding](#get_openai_embedding)
-  - [main](#main)
-
-## Getting Started
-
-### Dependencies
-
-This script requires the following Python libraries: `sys`, `re`, `time`, `os`, `argparse`, `yaml`, `json`, `requests`, `subprocess`, `chromadb`, and `hashlib`.
+### Requirements
+- Python 3.6 or above
+- Libraries: sys, re, time, os, argparse, yaml, json, requests, subprocess, chromadb, hashlib, openai
 
 ### Usage
-
-To run the script, use the following command:
-
-```bash
-python vector_embed_yaml.py [-p] [-e] [-s] [-f FILENAME] -c COMMAND
 ```
-
-Where:
-
-- `-p` or `--parse`: Only parse the Helm output.
-- `-e` or `--embed`: Send the parsed Helm output to OpenAI for embedding.
-- `-s` or `--save`: Save the embedding to a file.
-- `-f` or `--filename`: Filename to save the embedding. A default is used if not provided.
+python vector_embed_yaml.py [-h] [-p] [-e] [-c COMMAND] [-q QUERY] [--n_results N_RESULTS]
+```
+- `-p` or `--parse`: Only parse the helm output.
+- `-e` or `--embed`: Send the parsed helm output to OpenAI for embedding.
 - `-c` or `--command`: Command that outputs YAML to be processed.
+- `-q` or `--query`: Query the ChromaDB for similar documents.
+- `--n_results`: Number of similar results to fetch. Default is 2.
 
-At least one of the actions (`--parse` or `--embed`) must be chosen. The `--command` is required.
+### Functions
+- `get_gpt4_response(embeddings, user_question, model="gpt-4")`: Fetches a response from the GPT-4 model based on the user's question and the document embeddings.
+- `query_chromadb(query_text, n_results=10, metadata_filter=None, document_filter=None)`: Queries the ChromaDB for similar documents based on the embedded vector.
+- `command_already_embedded(command, collection)`: Checks if the given command is already in the metadata of any stored embeddings.
+- `display_chromadb_contents()`: Displays the contents of the ChromaDB database for debugging purposes.
+- `compute_id_from_command(command)`: Computes a unique ID for each command using SHA-256 hashing.
+- `store_embedding_in_chromadb(embedding_response, command, helm_output)`: Stores the embedding in ChromaDB with associated metadata.
+- `parse_helm_output(output)`: Parses the helm output into separate documents.
+- `get_openai_embedding(text, model_id="text-embedding-ada-002", api_key=None)`: Sends text to OpenAI for embedding.
+- `main(args)`: Main function that processes command-line arguments and orchestrates the script's workflow.
 
-## Functions
-
-### command_already_embedded
-
-Checks if the given command is already in the metadata of any stored embeddings.
-
-### display_chromadb_contents
-
-Displays the contents of the ChromaDB database for debugging purposes.
-
-### compute_id_from_command
-
-Computes a unique hash-based ID from the given command.
-
-### store_embedding_in_chromadb
-
-Stores the embedding in ChromaDB with associated metadata.
-
-### save_embedding_to_disk
-
-Saves the embedding to a file.
-
-### parse_helm_output
-
-Parses the output from a Helm command.
-
-### get_openai_embedding
-
-Sends a text to OpenAI for embedding.
-
-### main
-
-The main idea of the script. Is to create a vector representation based on yaml configs/output for example all of the installed helm charts on a cluster. Then send it to OpenAI for embedding, and stores the result in a ChromaDB database. then we an build a knowledge base an debugging assisant.
+### Error Handling
+The script exits with an error message if:
+- No action (parse or embed) is chosen.
+- No helm command is provided.
