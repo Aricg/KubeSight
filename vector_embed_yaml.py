@@ -1,17 +1,55 @@
 #!/usr/bin/env python
 
 import sys
-import re
-import time
 import os
 import argparse
 import yaml
-import json
 import requests
 import subprocess
 import chromadb
 import hashlib
 import openai
+import tiktoken
+
+
+def filter_results_by_distance(results, threshold, max_results):
+    """Filter and return results based on distance threshold and maximum number of results."""
+
+    distances = results['distances'][0]
+
+    # Add debug prints for the lengths of lists
+    print(f"Debug - Length of Distances: {len(distances)}")
+    print(f"Debug - Length of Documents: {len(results['documents'])}")
+
+    filtered_documents = []
+    filtered_metadatas = []
+    filtered_distances = []
+
+    for idx, distance in enumerate(distances):
+        # Check if idx is a valid index for documents and metadatas
+        if idx >= len(results['documents']):
+            print(f"Warning: Skipping distance at index {idx} due to lack of corresponding document.")
+            continue
+
+        # If the distance is below the threshold, store the document, metadata, and distance
+        if distance < threshold:
+            filtered_documents.append(results['documents'][idx])
+            filtered_metadatas.append(results['metadatas'][idx])
+            filtered_distances.append(distance)
+
+    # Limit by count:
+    filtered_documents = filtered_documents[:max_results]
+    filtered_metadatas = filtered_metadatas[:max_results]
+    filtered_distances = filtered_distances[:max_results]
+
+    return filtered_documents, filtered_metadatas, filtered_distances
+
+
+def num_tokens_from_string(string: str, encoding_name: str = "cl100k_base") -> int:
+    """Returns the number of tokens in a text string."""
+    encoding = tiktoken.get_encoding(encoding_name)
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
 
 
 def get_gpt4_response(embeddings, user_question, model="gpt-4"):
@@ -30,6 +68,7 @@ def get_gpt4_response(embeddings, user_question, model="gpt-4"):
 
 
 
+
 def query_chromadb(query_text, n_results=10, metadata_filter=None, document_filter=None):
     # Initialize ChromaDB client
     chroma_client = chromadb.PersistentClient(path="/tmp")
@@ -40,9 +79,16 @@ def query_chromadb(query_text, n_results=10, metadata_filter=None, document_filt
     # Get the embedding for the query text using the OpenAI model
     query_embedding_response = get_openai_embedding(query_text)
 
+    # Debug: Print the embedding response from OpenAI.
+    print("Embedding Response:")
+    print(f"Vector Length: {len(query_embedding_response)}")
+
     # Extract the actual embedding vector from the response. 
     # Adjust the key based on the actual structure of the response.
     query_embedding_vector = query_embedding_response['data'][0]['embedding']
+
+    # Debug: Print the extracted embedding vector.
+    print(f"Extracted Query Embedding Vector:, {len(query_embedding_vector)}")
 
     # Perform the query using the embedded vector
     results = collection.query(
@@ -52,6 +98,9 @@ def query_chromadb(query_text, n_results=10, metadata_filter=None, document_filt
         where_document=document_filter,
         include=["metadatas", "documents", "distances"]
     )
+
+    # Debug: Print the query results.
+    print("Query Results:", results)
 
     return results
 
@@ -132,9 +181,12 @@ def store_embedding_in_chromadb(embedding_response, command, helm_output):
 
     # Get embedding vector from the response
     embedding_vector = embedding_response['data'][0]['embedding']
+    print(f"Vector Length: {len(embedding_vector)}")
+    print(f"First 10 values: {embedding_vector[:10]}")
 
     # Create metadata for the embedding
     metadata = {"command": command}
+    print(f"Storing metadata: {metadata}")
 
     # Insert the embedding and metadata into the collection
     collection.add(
@@ -146,7 +198,7 @@ def store_embedding_in_chromadb(embedding_response, command, helm_output):
     print("New embedding added")
 
 
-def parse_helm_output(output):
+def parse_yaml_output(output):
     # Splitting the output by document start '---'
     documents = output.split('---')
     # Removing any empty strings in the list
@@ -170,7 +222,15 @@ def get_openai_embedding(text, model_id="text-embedding-ada-002", api_key=None):
         "model": model_id
     }
 
-    print(f"Text sent for embedding: {text}")
+    # Calculate number of tokens
+    num_tokens = num_tokens_from_string(text)
+    print(f"Number of tokens in the input string: {num_tokens}")
+
+    # Optionally, you can decide to refuse strings with too many tokens
+    #if num_tokens > SOME_LIMIT:
+    #    raise ValueError(f"Input string has too many tokens ({num_tokens}), refusing to process.")
+
+#    print(f"Text sent for embedding: {text}")
     response = requests.post("https://api.openai.com/v1/embeddings", headers=headers, json=data)
     return response.json()
 
@@ -183,7 +243,7 @@ def main(args):
         sys.exit(1)
     helm_output = helm_output.decode()
 
-    parsed_helm_documents = parse_helm_output(helm_output)
+    parsed_helm_documents = parse_yaml_output(helm_output)
 
     # If only parse mode, print the parsed documents
     if args.parse:
@@ -194,14 +254,14 @@ def main(args):
 
     # Initialize ChromaDB persistent client
     chroma_client = chromadb.PersistentClient(path="/tmp")
-    collection = chroma_client.get_or_create_collection(name="kube_commands")
+#    collection = chroma_client.get_or_create_collection(name="kube_commands")
 
 
     # If the command is already embedded, skip fetching the embedding
-    if command_already_embedded(args.command, collection):
-        print(f"Embedding for command '{args.command}' already exists.")
-        display_chromadb_contents()
-        return
+#    if command_already_embedded(args.command, collection):
+#        print(f"Embedding for command '{args.command}' already exists.")
+#        display_chromadb_contents()
+#        return
 
     # If embed mode, send the parsed output to OpenAI and print the response
     if args.embed:
@@ -224,22 +284,49 @@ if __name__ == '__main__':
     # Check if at least one of the actions (parse or embed) is chosen
 
 
+
     if args.query:
-        results = query_chromadb(args.query, n_results=args.n_results)
-        for idx, doc_id in enumerate(results['ids']):
+
+        display_chromadb_contents()
+        results = query_chromadb(args.query, n_results=100)  # Query more than necessary, then filter
+
+        # Filter the results
+        DISTANCE_THRESHOLD = 0.7  # Adjust this value as needed
+        docs, metas, dists = filter_results_by_distance(results, DISTANCE_THRESHOLD, args.n_results)
+
+        combined_text = ""
+
+        for idx, doc_id in enumerate(docs):
+            # Ensure you're accessing individual documents and not the entire list
+            document = docs[idx][0] if isinstance(docs[idx], list) else docs[idx]
+            
             print(f"ID: {doc_id}")
-            print(f"Document: {results['documents'][idx]}")
-            print(f"Metadata: {results['metadatas'][idx]}")
-            print(f"Distance: {results['distances'][idx]}")
-            print('-'*40)  # Separator for better readability
-    
+            print(f"Metadata: {metas[idx]}")
+            print(f"Distance: {dists[idx]}")
+            print('-'*40)
+        
+            combined_text += f"{document} {metas[idx]} {dists[idx]} "
+
+
+        num_tokens = num_tokens_from_string(combined_text)
+        print(f"Total tokens in the combined text: {num_tokens}")
+
         # Ask user for a question
         user_question = input("Please enter your question for the expert system: ")
-    
-        # Fetch response from GPT-4
-        gpt4_response = get_gpt4_response(results, user_question)
-        print(f"Expert System Response: {gpt4_response}")
+        combined_text += user_question
 
+        # Count the tokens of the combined text
+        num_tokens = num_tokens_from_string(combined_text)
+        print(f"Total tokens in the combined text: {num_tokens}")
+
+        # Check token limit
+        if num_tokens > 2048:
+            print("Error: Combined text exceeds token limit for the model.")
+            sys.exit(1)
+
+        # Fetch response from GPT-4
+        gpt4_response = get_gpt4_response(docs, user_question)  # Note: You might need to modify the get_gpt4_response function to accept the filtered docs
+        print(f"Expert System Response: {gpt4_response}")
 
     if not (args.parse or args.embed):
         print("Error: Please choose at least one action (parse or embed).")

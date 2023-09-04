@@ -1,7 +1,7 @@
 # vector_embed_yaml.py Documentation
 
-This script processes helm output, sends it to OpenAI for text embedding, stores the embedding in a ChromaDB database.
-It can also query the ChromaDB for similar documents based on the embedded vector and then provide them as context when generating responses using OpenAI's GPT-4 model.
+This script processes arbitrary yaml output (eg: helm or kubectl commands) sends it to OpenAI for text embedding and stores the embedding in a ChromaDB database.
+Then we query the ChromaDB for similar documents based on the embedded vector which we can provide in the form of context when asking questions to OpenAI's GPT-4 model.
 
 ## Index
 1. [Requirements](#requirements)
